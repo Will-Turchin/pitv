@@ -30,3 +30,31 @@ button:disabled { opacity: .52; cursor: wait; transform: none !important; }
 @media (max-width: 900px) { .app-shell { padding: 0 28px 20px; }.workspace { grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.2fr); gap: 35px; }.tv-track h2 { font-size: 31px; } }
 @media (max-width: 720px) { .app-shell { padding: 0 17px 18px; }.topbar { height: 68px; }.hide-mobile, .preview-column, .bottom-bar { display: none; }.workspace { display: block; padding: 29px 0 0; }.phone-column { max-width: none; }.phone-heading h1 { font-size: 29px; }.mobile-tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; background: #121722; border: 1px solid var(--line); border-radius: 11px; margin-top: 23px; }.mobile-tabs button { height: 33px; border-radius: 7px; color: var(--muted); background: transparent; font-size: 10px; }.mobile-tabs button.active { background: #273146; color: var(--ink); box-shadow: 0 2px 8px #00000028; }.mobile-tabs .icon { margin-right: 6px; color: var(--blue); }.phone-surface { display: block; }.phone-surface.tab-hidden, .mobile-preview.tab-hidden { display: none; }.mobile-preview { display: block; margin-top: 21px; }.mobile-preview .tv-home, .mobile-preview .tv-disney, .mobile-preview .tv-kodi, .mobile-preview .tv-spotify { min-height: 205px; aspect-ratio: 1.42; }.mobile-preview .tv-track h2 { font-size: 23px; }.mobile-preview .tv-album-art { width: 34%; }.device-status-card { margin-top: 20px; }.launcher-grid { gap: 7px; }.launcher-card { min-height: 83px; padding: 10px; }.remote-controls { margin-top: 25px; }.dpad-wrap { grid-template-columns: 1fr 84px; gap: 14px; }.dpad { width: 175px; height: 175px; }.spotify-remote { padding-top: 17px; }.album-art { width: min(100%, 235px); }.settings-panel { padding: 27px 21px; } }
 @media (max-width: 370px) { .app-shell { padding-left: 12px; padding-right: 12px; }.device-name { font-size: 11px; }.mode-chip { display: none; }.dpad-wrap { grid-template-columns: 1fr 75px; }.dpad { width: 160px; height: 160px; padding: 21px; }.home-launcher { min-height: 54px; } }
+
+.browser-controls { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; margin: 12px 0 16px; }
+.browser-controls button { height: 35px; border: 1px solid var(--line); border-radius: 8px; background: #171e2b; color: var(--muted); font-size: 10px; }
+.browser-controls button:hover, .browser-controls button.active { color: var(--ink); border-color: #8eb5ff55; background: #263149; }
+.remote-keyboard { margin: -5px 0 18px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #111722; }
+.remote-keyboard label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 10px; }
+.remote-keyboard > div { display: flex; gap: 7px; }
+.remote-keyboard input { min-width: 0; flex: 1; height: 38px; padding: 0 11px; border: 1px solid #ffffff1c; border-radius: 8px; outline: none; background: #0b1019; color: var(--ink); font: inherit; font-size: 12px; }
+.remote-keyboard input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #8eb5ff14; }
+.remote-keyboard button { min-width: 58px; border-radius: 8px; background: #293650; color: var(--ink); font-size: 10px; }
+.remote-keyboard .keyboard-actions { margin-top: 7px; }
+.remote-keyboard .keyboard-actions button { height: 31px; flex: 1; color: var(--muted); background: #1b2332; }
+.remote-keyboard small { display: block; margin-top: 8px; color: var(--muted-2); font-size: 8px; line-height: 1.4; }
+.live-screen { position: relative; width: 100%; height: 100%; overflow: hidden; background: #080b10; }
+.live-screen > img { display: none; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.live-screen > img.loaded { display: block; }
+.live-screen > img.loaded { cursor: crosshair; }
+.live-screen-badge { position: absolute; top: 9px; right: 9px; padding: 4px 6px; border-radius: 4px; background: #080b10b8; color: #86db9c; font-size: 7px; font-weight: 800; letter-spacing: .13em; backdrop-filter: blur(4px); }
+.preview-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; padding: 20px; text-align: center; color: var(--muted); }
+.preview-error strong { color: var(--ink); font-size: 12px; }
+.preview-error span { font-size: 9px; }
+.preview-error button { margin-top: 4px; padding: 7px 14px; border-radius: 7px; background: #263149; color: var(--ink); font-size: 9px; }
+.trackpad-section { margin: 22px 0 4px; }
+.trackpad { height: 112px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 1px solid #ffffff17; border-radius: 12px; background: radial-gradient(circle at center, #202b3d, #111722); color: var(--muted); font-size: 11px; touch-action: none; user-select: none; cursor: crosshair; }
+.trackpad small { color: var(--muted-2); font-size: 8px; }
+.pointer-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; margin-top: 7px; }
+.pointer-buttons button { height: 34px; border: 1px solid var(--line); border-radius: 8px; background: #171e2b; color: var(--muted); font-size: 9px; }
+.pointer-buttons button:hover { color: var(--ink); background: #263149; }

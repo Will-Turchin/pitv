@@ -25,6 +25,9 @@ BROWSER_URL_FILE = APP_ROOT / ".piplay-browser-url"
 PORT = int(os.environ.get("PIPLAY_PORT", "4173"))
 CEC_DEVICE = os.environ.get("PIPLAY_CEC_DEVICE", "/dev/cec1")
 CEC_PHYSICAL_ADDRESS = os.environ.get("PIPLAY_CEC_PHYSICAL_ADDRESS", "2.0.0.0")
+DISPLAY_WIDTH = int(os.environ.get("PIPLAY_DISPLAY_WIDTH", "1920"))
+DISPLAY_HEIGHT = int(os.environ.get("PIPLAY_DISPLAY_HEIGHT", "1080"))
+POINTER_HIDE_DELAY = float(os.environ.get("PIPLAY_POINTER_HIDE_DELAY", "0.35"))
 HOME_URL = f"http://127.0.0.1:{PORT}/"
 APP_URLS = {
     "Home": HOME_URL,
@@ -41,6 +44,9 @@ CONTROL_ENV = {
 
 STATE_LOCK = threading.Lock()
 ACTION_LOCK = threading.Lock()
+SCREENSHOT_LOCK = threading.Lock()
+POINTER_LOCK = threading.Lock()
+POINTER_HIDE_TIMER: threading.Timer | None = None
 
 
 def run(command: list[str], timeout: float = 8, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -141,6 +147,42 @@ def wtype_key(*keys: str) -> None:
         run(["wtype", "-k", key], timeout=3, check=True)
 
 
+def type_text(value: str) -> None:
+    """Type user-provided text without passing it through a shell."""
+    if not value or len(value) > 512:
+        raise ValueError("Text must be between 1 and 512 characters")
+    if any(ord(character) < 32 for character in value):
+        raise ValueError("Text contains unsupported control characters")
+    run(["wtype", "--", value], timeout=8, check=True)
+
+
+def capture_display() -> bytes:
+    """Capture the current Wayland output at preview resolution."""
+    with SCREENSHOT_LOCK:
+        result = subprocess.run(
+            ["grim", "-t", "png", "-s", "0.5", "-l", "3", "-"], env=CONTROL_ENV,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+        )
+    if result.returncode != 0 or not result.stdout:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip() or "Display capture failed")
+    return result.stdout
+
+
+def hide_pointer_soon() -> None:
+    """Move the pointer off-screen shortly after the last pointer action."""
+    global POINTER_HIDE_TIMER
+
+    def hide() -> None:
+        run(["wlrctl", "pointer", "move", "-10000", "-10000"], timeout=3)
+
+    with POINTER_LOCK:
+        if POINTER_HIDE_TIMER is not None:
+            POINTER_HIDE_TIMER.cancel()
+        POINTER_HIDE_TIMER = threading.Timer(POINTER_HIDE_DELAY, hide)
+        POINTER_HIDE_TIMER.daemon = True
+        POINTER_HIDE_TIMER.start()
+
+
 def navigate_browser(url: str) -> None:
     stop_unit("piplay-kodi.service")
     expected_origin(url)
@@ -210,12 +252,42 @@ def perform_action(payload: dict[str, object]) -> tuple[str, dict[str, object]]:
         elif action == "key":
             key_map = {
                 "up": "Up", "down": "Down", "left": "Left", "right": "Right",
-                "ok": "Return", "back": "Escape",
+                "ok": "Return", "back": "Escape", "tab": "Tab", "delete": "BackSpace",
             }
-            if value not in key_map:
+            if value == "shift-tab":
+                run(["wtype", "-M", "shift", "-k", "Tab", "-m", "shift"], timeout=3, check=True)
+            elif value not in key_map:
                 raise ValueError("Unknown key")
-            wtype_key(key_map[value])
+            else:
+                wtype_key(key_map[value])
             message = f"{value.title()} sent"
+        elif action == "text":
+            type_text(value)
+            message = "Text sent"
+        elif action == "pointer":
+            parts = value.split(":")
+            if parts[0] == "move" and len(parts) == 3:
+                dx, dy = (max(-500, min(500, int(part))) for part in parts[1:])
+                run(["wlrctl", "pointer", "move", str(dx), str(dy)], timeout=3, check=True)
+                message = "Pointer moved"
+            elif parts[0] == "click" and len(parts) == 3:
+                x, y = (float(part) for part in parts[1:])
+                if not 0 <= x <= 1 or not 0 <= y <= 1:
+                    raise ValueError("Pointer coordinates are outside the display")
+                run(["wlrctl", "pointer", "move", "-10000", "-10000"], timeout=3, check=True)
+                run(["wlrctl", "pointer", "move", str(round(x * DISPLAY_WIDTH)), str(round(y * DISPLAY_HEIGHT))], timeout=3, check=True)
+                run(["wlrctl", "pointer", "click"], timeout=3, check=True)
+                message = "TV clicked"
+            elif parts[0] == "scroll" and len(parts) == 2:
+                amount = max(-10, min(10, int(parts[1])))
+                run(["wlrctl", "pointer", "scroll", str(amount), "0"], timeout=3, check=True)
+                message = "Scrolled"
+            elif value == "click":
+                run(["wlrctl", "pointer", "click"], timeout=3, check=True)
+                message = "Clicked"
+            else:
+                raise ValueError("Unknown pointer action")
+            hide_pointer_soon()
         elif action == "media":
             if value not in {"playpause", "previous", "next"}:
                 raise ValueError("Unknown media action")
@@ -289,11 +361,25 @@ class PiPlayHandler(SimpleHTTPRequestHandler):
         return urlparse(origin).netloc == self.headers.get("Host")
 
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] == "/api/status":
+        path = self.path.split("?", 1)[0]
+        if path == "/api/status":
             try:
                 self.send_json(status_payload())
             except Exception as error:
                 self.send_json({"online": False, "error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if path == "/api/screen":
+            try:
+                image = capture_display()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(image)))
+                self.send_header("Cache-Control", "no-store, max-age=0")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(image)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                self.send_json({"ok": False, "error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
         super().do_GET()
 

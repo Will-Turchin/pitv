@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "Home" | "Spotify" | "Disney+" | "My Media";
 type RemoteTab = "Remote" | "TV Preview";
@@ -77,6 +77,8 @@ export default function Home() {
   const [clock, setClock] = useState("");
   const [status, setStatus] = useState<PiStatus>(initialStatus);
   const [busy, setBusy] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [keyboardText, setKeyboardText] = useState("");
 
   const refreshStatus = async () => {
     try {
@@ -171,6 +173,21 @@ export default function Home() {
     setToast(label);
   };
 
+  const sendTypedText = async () => {
+    if (!keyboardText) return;
+    if (await sendCommand("text", keyboardText)) setKeyboardText("");
+  };
+
+  const sendPointer = async (value: string) => {
+    try {
+      const response = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "pointer", value }) });
+      const result = await response.json() as { ok: boolean; error?: string };
+      if (!response.ok || !result.ok) throw new Error(result.error || "Pointer command failed");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Pointer command failed");
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -207,17 +224,18 @@ export default function Home() {
                 {serviceTiles.map((tile) => <button key={tile.name} className={`launcher-card ${tile.className} ${mode === tile.name ? "selected" : ""}`} onClick={() => setAppMode(tile.name as Mode)}><span className="launcher-mark">{tile.mark}</span><span className="launcher-copy"><strong>{tile.name}</strong><small>{tile.meta}</small></span><span className="launch-arrow">↗</span></button>)}
               </div>
               <button className={`home-launcher ${mode === "Home" ? "selected" : ""}`} onClick={() => setAppMode("Home")}><span className="home-launcher-icon">⌂</span><span><strong>Home</strong><small>piPlay home</small></span><span className="launch-arrow">↗</span></button>
-              <RemoteControls mode={mode} move={move} action={action} setAppMode={setAppMode} volume={volume} muted={muted} busy={busy} />
+              <RemoteControls mode={mode} move={move} action={action} setAppMode={setAppMode} volume={volume} muted={muted} busy={busy} keyboardOpen={keyboardOpen} setKeyboardOpen={setKeyboardOpen} keyboardText={keyboardText} setKeyboardText={setKeyboardText} sendTypedText={sendTypedText} sendCommand={sendCommand} />
+              <Trackpad sendPointer={sendPointer} />
             </>
           </div>
 
-          <div className={`mobile-preview ${tab === "Remote" ? "tab-hidden" : ""}`}><TvScreen mode={mode} clock={clock} selectedIndex={selectedIndex} isPlaying={isPlaying} progress={progress} selection={selection} setAppMode={setAppMode} /></div>
+          <div className={`mobile-preview ${tab === "Remote" ? "tab-hidden" : ""}`}><LivePreview sendPointer={sendPointer} /></div>
           <div className="toast" aria-live="polite">{toast && <><span className="toast-pulse"></span>{toast}</>}</div>
         </section>
 
         <section className="preview-column">
           <div className="preview-heading"><div><p className="overline">CONNECTED DISPLAY</p><h2>TV Preview</h2></div><div className="preview-live"><span className="status-dot"></span>Live preview</div></div>
-          <div className="tv-frame"><div className="tv-screen"><TvScreen mode={mode} clock={clock} selectedIndex={selectedIndex} isPlaying={isPlaying} progress={progress} selection={selection} setAppMode={setAppMode} /></div><div className="tv-stand"><span></span></div></div>
+          <div className="tv-frame"><div className="tv-screen"><LivePreview sendPointer={sendPointer} /></div><div className="tv-stand"><span></span></div></div>
           <div className="preview-foot"><span><span className="tiny-led"></span> HDMI 1</span><span>Connected over local network</span><span>{clock || "—"}</span></div>
         </section>
       </div>
@@ -233,8 +251,48 @@ function SystemRow({ label, value, good }: { label: string; value: string; good?
   return <div className="system-row"><span>{label}</span><strong className={good ? "good-value" : ""}>{good && <span className="status-dot"></span>}{value}</strong></div>;
 }
 
-function RemoteControls({ mode, move, action, setAppMode, volume, muted, busy }: { mode: Mode; move: (direction: "left" | "right" | "up" | "down") => void; action: (label: string) => void; setAppMode: (mode: Mode) => void; volume: number; muted: boolean; busy: boolean }) {
-  return <div className="remote-controls"><div className="control-label"><span>REMOTE</span><span className="control-mode">{busy ? "Sending…" : mode === "Home" ? "Choose an app" : `Navigate ${mode}`}</span></div><div className="dpad-wrap"><div className="dpad"><button disabled={busy} className="dpad-up" onClick={() => move("up")} aria-label="Up">↑</button><button disabled={busy} className="dpad-left" onClick={() => move("left")} aria-label="Left">←</button><button disabled={busy} className="dpad-ok" onClick={() => action("Center / OK")} aria-label="Center / OK">OK</button><button disabled={busy} className="dpad-right" onClick={() => move("right")} aria-label="Right">→</button><button disabled={busy} className="dpad-down" onClick={() => move("down")} aria-label="Down">↓</button></div><div className="back-home"><button disabled={busy} onClick={() => action("Back")}><span>↩</span>Back</button><button disabled={busy} onClick={() => setAppMode("Home")}><span>⌂</span>Home</button></div></div><div className="media-controls"><button disabled={busy} onClick={() => action("Previous")} aria-label="Previous"><span>◀</span><small>PREV</small></button><button disabled={busy} className="play-control" onClick={() => action("Play / Pause")} aria-label="Play or pause"><span>▶Ⅱ</span><small>PLAY</small></button><button disabled={busy} onClick={() => action("Next")} aria-label="Next"><span>▶</span><small>NEXT</small></button></div><div className="volume-controls"><button disabled={busy} onClick={() => action("Volume Down")} aria-label="Volume down">−</button><div className="volume-track"><span style={{ width: `${muted ? 0 : volume}%` }}></span></div><button disabled={busy} onClick={() => action("Volume Up")} aria-label="Volume up">+</button><button disabled={busy} className="mute-button" onClick={() => action("Mute")} aria-label="Mute">{muted ? "×" : "⌁"}</button></div></div>;
+function RemoteControls({ mode, move, action, setAppMode, volume, muted, busy, keyboardOpen, setKeyboardOpen, keyboardText, setKeyboardText, sendTypedText, sendCommand }: { mode: Mode; move: (direction: "left" | "right" | "up" | "down") => void; action: (label: string) => void; setAppMode: (mode: Mode) => void; volume: number; muted: boolean; busy: boolean; keyboardOpen: boolean; setKeyboardOpen: (value: boolean) => void; keyboardText: string; setKeyboardText: (value: string) => void; sendTypedText: () => Promise<void>; sendCommand: (action: string, value: string) => Promise<boolean> }) {
+  return <div className="remote-controls"><div className="control-label"><span>REMOTE</span><span className="control-mode">{busy ? "Sending…" : mode === "Home" ? "Choose an app" : `Navigate ${mode}`}</span></div><div className="browser-controls"><button disabled={busy} onClick={() => void sendCommand("key", "shift-tab")}>⇤ Previous</button><button disabled={busy} onClick={() => void sendCommand("key", "tab")}>Next ⇥</button><button className={keyboardOpen ? "active" : ""} onClick={() => setKeyboardOpen(!keyboardOpen)}>⌨ Type</button></div>{keyboardOpen && <form className="remote-keyboard" onSubmit={(event) => { event.preventDefault(); void sendTypedText(); }}><label htmlFor="remote-text">Type into the selected field on TV</label><div><input id="remote-text" type="text" value={keyboardText} onChange={(event) => setKeyboardText(event.target.value)} placeholder="Email, password, or search" autoComplete="off" /><button type="submit" disabled={busy || !keyboardText}>Send</button></div><div className="keyboard-actions"><button type="button" disabled={busy} onClick={() => void sendCommand("key", "delete")}>⌫ Delete</button><button type="button" disabled={busy} onClick={() => void sendCommand("key", "ok")}>↵ Enter</button></div><small>Password text is sent directly to the TV and is never stored.</small></form>}<div className="dpad-wrap"><div className="dpad"><button disabled={busy} className="dpad-up" onClick={() => move("up")} aria-label="Up">↑</button><button disabled={busy} className="dpad-left" onClick={() => move("left")} aria-label="Left">←</button><button disabled={busy} className="dpad-ok" onClick={() => action("Center / OK")} aria-label="Center / OK">OK</button><button disabled={busy} className="dpad-right" onClick={() => move("right")} aria-label="Right">→</button><button disabled={busy} className="dpad-down" onClick={() => move("down")} aria-label="Down">↓</button></div><div className="back-home"><button disabled={busy} onClick={() => action("Back")}><span>↩</span>Back</button><button disabled={busy} onClick={() => setAppMode("Home")}><span>⌂</span>Home</button></div></div><div className="media-controls"><button disabled={busy} onClick={() => action("Previous")} aria-label="Previous"><span>◀</span><small>PREV</small></button><button disabled={busy} className="play-control" onClick={() => action("Play / Pause")} aria-label="Play or pause"><span>▶Ⅱ</span><small>PLAY</small></button><button disabled={busy} onClick={() => action("Next")} aria-label="Next"><span>▶</span><small>NEXT</small></button></div><div className="volume-controls"><button disabled={busy} onClick={() => action("Volume Down")} aria-label="Volume down">−</button><div className="volume-track"><span style={{ width: `${muted ? 0 : volume}%` }}></span></div><button disabled={busy} onClick={() => action("Volume Up")} aria-label="Volume up">+</button><button disabled={busy} className="mute-button" onClick={() => action("Mute")} aria-label="Mute">{muted ? "×" : "⌁"}</button></div></div>;
+}
+
+function LivePreview({ sendPointer }: { sendPointer: (value: string) => Promise<void> }) {
+  const [source, setSource] = useState(`/api/screen?t=${Date.now()}`);
+  const [available, setAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    const timer = window.setInterval(() => setSource(`/api/screen?t=${Date.now()}`), 1500);
+    return () => window.clearInterval(timer);
+  }, []);
+  const clickScreen = (event: React.MouseEvent<HTMLImageElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const imageRatio = event.currentTarget.naturalWidth / event.currentTarget.naturalHeight;
+    const boxRatio = rect.width / rect.height;
+    const width = boxRatio > imageRatio ? rect.height * imageRatio : rect.width;
+    const height = boxRatio > imageRatio ? rect.height : rect.width / imageRatio;
+    const x = (event.clientX - rect.left - (rect.width - width) / 2) / width;
+    const y = (event.clientY - rect.top - (rect.height - height) / 2) / height;
+    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) void sendPointer(`click:${x}:${y}`);
+  };
+  return <div className="live-screen">{available === false && <div className="preview-error"><strong>Live preview unavailable</strong><span>The controller could not capture the TV display.</span><button onClick={() => { setAvailable(null); setSource(`/api/screen?t=${Date.now()}`); }}>Retry</button></div>}<img className={available ? "loaded" : ""} src={source} alt="Live view of the TV display; tap anywhere to click" onClick={clickScreen} onLoad={() => setAvailable(true)} onError={() => setAvailable(false)} />{available && <><span className="live-screen-badge">LIVE · TAP TO CLICK</span></>}</div>;
+}
+
+function Trackpad({ sendPointer }: { sendPointer: (value: string) => Promise<void> }) {
+  const lastPoint = useRef<{ x: number; y: number } | null>(null);
+  const pending = useRef({ x: 0, y: 0 });
+  const timer = useRef<number | null>(null);
+  const flush = () => {
+    timer.current = null;
+    const { x, y } = pending.current;
+    pending.current = { x: 0, y: 0 };
+    if (x || y) void sendPointer(`move:${Math.round(x)}:${Math.round(y)}`);
+  };
+  const movePointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!lastPoint.current) return;
+    pending.current.x += (event.clientX - lastPoint.current.x) * 2;
+    pending.current.y += (event.clientY - lastPoint.current.y) * 2;
+    lastPoint.current = { x: event.clientX, y: event.clientY };
+    if (timer.current === null) timer.current = window.setTimeout(flush, 45);
+  };
+  return <section className="trackpad-section"><div className="control-label"><span>POINTER</span><span className="control-mode">Move, click, or scroll</span></div><div className="trackpad" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); lastPoint.current = { x: event.clientX, y: event.clientY }; }} onPointerMove={movePointer} onPointerUp={() => { lastPoint.current = null; flush(); }}><span>Drag to move the TV pointer</span><small>Tap the live preview for precise selection</small></div><div className="pointer-buttons"><button onClick={() => void sendPointer("click")}>Click</button><button onClick={() => void sendPointer("scroll:-4")}>Scroll up</button><button onClick={() => void sendPointer("scroll:4")}>Scroll down</button></div></section>;
 }
 
 function SpotifyRemote({ progress, setProgress, isPlaying, setIsPlaying, volume, muted, setMuted, action }: { progress: number; setProgress: (value: number) => void; isPlaying: boolean; setIsPlaying: (value: boolean) => void; volume: number; muted: boolean; setMuted: (value: boolean) => void; action: (label: string) => void }) {

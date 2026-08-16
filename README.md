@@ -7,7 +7,7 @@ This is the standalone piPlay Living Room TV controller for a Raspberry Pi. The 
 - Node.js 20.19 or newer
 - npm (included with Node.js)
 - Python 3.11 or newer
-- `cec-ctl`, `wpctl`, `wtype`, `playerctl`, Chromium, and Kodi
+- `cec-ctl`, `wpctl`, `wtype`, `wlrctl`, `playerctl`, `grim`, Firefox, and Kodi
 
 ## Run locally
 
@@ -26,7 +26,7 @@ npm run build
 npm run preview
 ```
 
-The static production files are written to `dist/`. Serve that directory with any static web server, such as Nginx or Caddy, on the Raspberry Pi.
+The static production files are written to `dist/`. Run `python3 server.py` in production so the TV controls and live preview API are available.
 
 ## Notes
 
