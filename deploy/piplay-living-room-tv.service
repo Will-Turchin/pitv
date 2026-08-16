@@ -1,0 +1,13 @@
+[Unit]
+Description=piPlay Living Room TV controller
+After=network-online.target pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/piPlay-living-room-tv
+ExecStart=/usr/bin/python3 %h/piPlay-living-room-tv/server.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

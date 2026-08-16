@@ -1,0 +1,15 @@
+[Unit]
+Description=piPlay Kodi display
+After=graphical-session.target pipewire.service
+
+[Service]
+Type=simple
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+ExecStart=/usr/bin/kodi --standalone
+Restart=no
+TimeoutStopSec=5
+KillMode=mixed
+SendSIGKILL=yes

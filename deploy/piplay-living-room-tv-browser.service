@@ -1,0 +1,19 @@
+[Unit]
+Description=piPlay Living Room TV Firefox display
+After=piplay-living-room-tv.service graphical-session.target
+Wants=piplay-living-room-tv.service
+
+[Service]
+Type=simple
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+ExecStart=/usr/bin/python3 %h/piPlay-living-room-tv/browser_launcher.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
