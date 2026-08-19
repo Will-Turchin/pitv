@@ -27,7 +27,6 @@ CEC_DEVICE = os.environ.get("PIPLAY_CEC_DEVICE", "/dev/cec1")
 CEC_PHYSICAL_ADDRESS = os.environ.get("PIPLAY_CEC_PHYSICAL_ADDRESS", "2.0.0.0")
 DISPLAY_WIDTH = int(os.environ.get("PIPLAY_DISPLAY_WIDTH", "1920"))
 DISPLAY_HEIGHT = int(os.environ.get("PIPLAY_DISPLAY_HEIGHT", "1080"))
-POINTER_HIDE_DELAY = float(os.environ.get("PIPLAY_POINTER_HIDE_DELAY", "0.35"))
 HOME_URL = f"http://127.0.0.1:{PORT}/"
 APP_URLS = {
     "Home": HOME_URL,
@@ -45,8 +44,6 @@ CONTROL_ENV = {
 STATE_LOCK = threading.Lock()
 ACTION_LOCK = threading.Lock()
 SCREENSHOT_LOCK = threading.Lock()
-POINTER_LOCK = threading.Lock()
-POINTER_HIDE_TIMER: threading.Timer | None = None
 
 
 def run(command: list[str], timeout: float = 8, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -168,21 +165,6 @@ def capture_display() -> bytes:
     return result.stdout
 
 
-def hide_pointer_soon() -> None:
-    """Move the pointer off-screen shortly after the last pointer action."""
-    global POINTER_HIDE_TIMER
-
-    def hide() -> None:
-        run(["wlrctl", "pointer", "move", "-10000", "-10000"], timeout=3)
-
-    with POINTER_LOCK:
-        if POINTER_HIDE_TIMER is not None:
-            POINTER_HIDE_TIMER.cancel()
-        POINTER_HIDE_TIMER = threading.Timer(POINTER_HIDE_DELAY, hide)
-        POINTER_HIDE_TIMER.daemon = True
-        POINTER_HIDE_TIMER.start()
-
-
 def navigate_browser(url: str) -> None:
     stop_unit("piplay-kodi.service")
     expected_origin(url)
@@ -287,7 +269,6 @@ def perform_action(payload: dict[str, object]) -> tuple[str, dict[str, object]]:
                 message = "Clicked"
             else:
                 raise ValueError("Unknown pointer action")
-            hide_pointer_soon()
         elif action == "media":
             if value not in {"playpause", "previous", "next"}:
                 raise ValueError("Unknown media action")
