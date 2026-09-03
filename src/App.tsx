@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Mode = "Home" | "Spotify" | "Disney+" | "My Media";
 type RemoteTab = "Remote" | "TV Preview";
@@ -15,7 +15,10 @@ type PiStatus = {
   browser: boolean;
   kodi: boolean;
   freeGb: number;
+  nowPlaying: NowPlaying | null;
 };
+
+type NowPlaying = { status: string; title: string; artist: string; album: string; artUrl: string; lengthMs: number; positionMs: number };
 
 const initialStatus: PiStatus = {
   online: false,
@@ -25,51 +28,35 @@ const initialStatus: PiStatus = {
   volume: 0,
   muted: false,
   tvPower: "checking",
-  display: "VIZIO TV · HDMI",
+  display: "HDMI display",
   browser: false,
   kodi: false,
   freeGb: 0,
+  nowPlaying: null,
 };
 
 const serviceTiles = [
-  { name: "Disney+", className: "disney", eyebrow: "Streaming", meta: "Chromium fullscreen", mark: "D+" },
-  { name: "Spotify", className: "spotify", eyebrow: "Music", meta: "Spotify Web Player", mark: "◉" },
-  { name: "My Media", className: "kodi", eyebrow: "Library", meta: "Kodi local media", mark: "K" },
-];
-
-const spotifyTrack = {
-  title: "Midnight City",
-  artist: "M83",
-  album: "Hurry Up, We’re Dreaming",
-  color: "#f09b75",
-};
-
-const disneyItems = [
-  { title: "The Mandalorian", kind: "Series", color: "#344869", accent: "#8dd6ff" },
-  { title: "Luca", kind: "Movie", color: "#278d93", accent: "#ffd979" },
-  { title: "Andor", kind: "Series", color: "#392b38", accent: "#df7659" },
-  { title: "Encanto", kind: "Movie", color: "#6b3f82", accent: "#ffd76a" },
-  { title: "Moana", kind: "Movie", color: "#0c7584", accent: "#f9b869" },
-];
-
-const mediaItems = [
-  { title: "Movies", meta: "Kodi library", color: "#4d6572", icon: "▶" },
-  { title: "TV Shows", meta: "Kodi library", color: "#c26237", icon: "▣" },
-  { title: "Videos", meta: "Local files", color: "#bd7947", icon: "V" },
-  { title: "Pictures", meta: "Local files", color: "#3a7569", icon: "P" },
-  { title: "Music", meta: "Kodi library", color: "#70568d", icon: "♪" },
+  { name: "Disney+", className: "disney", eyebrow: "Streaming", meta: "Streaming", mark: "Disney+" },
+  { name: "Spotify", className: "spotify", eyebrow: "Music", meta: "Music", mark: "Spotify" },
+  { name: "My Media", className: "kodi", eyebrow: "Library", meta: "Kodi", mark: "Kodi" },
 ];
 
 function Icon({ children }: { children: React.ReactNode }) {
   return <span className="icon" aria-hidden="true">{children}</span>;
 }
 
+function BrandIcon({ name }: { name: Mode }) {
+  if (name === "Spotify") return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M6.8 9.4c3.8-1.1 7.8-.8 10.9.9M7.5 12.5c3.1-.8 6.6-.5 9.3.8M8.2 15.4c2.7-.6 5.5-.3 7.8.7" fill="none" stroke="#132019" strokeWidth="1.7" strokeLinecap="round"/></svg>;
+  if (name === "Disney+") return <svg viewBox="0 0 34 24" aria-hidden="true"><path d="M2 9.2C8.4 2 21.4 1.2 29 6.3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/><path d="M5 11.5v7h3.2c3 0 4.6-1.2 4.6-3.6 0-2.3-1.6-3.4-4.6-3.4H5Zm13.2 0v7m-3.2-7v7m10-5v5m-2.5-2.5h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+  if (name === "My Media") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 4 4-4 4-4-4 4-4Zm-6 6 4 4-4 4-4-4 4-4Zm12 0 4 4-4 4-4-4 4-4Zm-6 6 4 4-4 4-4-4 4-4Z" fill="currentColor"/></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v10h-6v-6H9v6H3V11Z" fill="currentColor"/></svg>;
+}
+
+const haptic = () => { if (navigator.vibrate) navigator.vibrate(8); };
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>("Home");
   const [tab, setTab] = useState<RemoteTab>("Remote");
-  const [selectedIndex, setSelectedIndex] = useState(1);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [progress, setProgress] = useState(42);
   const [volume, setVolume] = useState(68);
   const [muted, setMuted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -79,12 +66,15 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [keyboardText, setKeyboardText] = useState("");
+  const commandEpoch = useRef(0);
 
   const refreshStatus = async () => {
+    const epoch = commandEpoch.current;
     try {
       const response = await fetch("/api/status", { cache: "no-store" });
       if (!response.ok) throw new Error("Pi did not respond");
       const next = await response.json() as PiStatus;
+      if (epoch !== commandEpoch.current) return;
       setStatus(next);
       setVolume(next.volume);
       setMuted(next.muted);
@@ -95,6 +85,7 @@ export default function Home() {
   };
 
   const sendCommand = async (actionName: string, value: string) => {
+    commandEpoch.current += 1;
     setBusy(true);
     try {
       const response = await fetch("/api/action", {
@@ -133,36 +124,26 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!isPlaying || mode !== "Spotify") return;
-    const timer = window.setInterval(() => setProgress((value) => value >= 100 ? 0 : value + 0.25), 1000);
-    return () => window.clearInterval(timer);
-  }, [isPlaying, mode]);
-
-  useEffect(() => {
     const timeout = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const selection = useMemo(() => mode === "Disney+" ? disneyItems[selectedIndex % disneyItems.length] : mediaItems[selectedIndex % mediaItems.length], [mode, selectedIndex]);
-
   const setAppMode = async (next: Mode) => {
     setMode(next);
     setTab("Remote");
-    setSelectedIndex(next === "Disney+" ? 1 : 0);
     setToast(`Launching ${next}…`);
     const worked = await sendCommand("launch", next);
     if (!worked) setMode(status.mode);
   };
 
   const move = (direction: "left" | "right" | "up" | "down") => {
-    const step = direction === "left" || direction === "up" ? -1 : 1;
-    const total = mode === "Disney+" ? disneyItems.length : mode === "My Media" ? mediaItems.length : 3;
-    setSelectedIndex((current) => (current + step + total) % total);
+    haptic();
     void sendCommand("key", direction);
   };
 
   const action = (label: string) => {
-    if (label === "Play / Pause") { setIsPlaying((value) => !value); void sendCommand("media", "playpause"); return; }
+    haptic();
+    if (label === "Play / Pause") { void sendCommand("media", "playpause"); return; }
     if (label === "Previous") { void sendCommand("media", "previous"); return; }
     if (label === "Next") { void sendCommand("media", "next"); return; }
     if (label === "Mute") { void sendCommand("volume", "mute"); return; }
@@ -208,24 +189,23 @@ export default function Home() {
             <button className="more-button" onClick={() => setSettingsOpen((value) => !value)} aria-label="Toggle system panel">•••</button>
           </div>
 
-          <div className="device-status-card">
-            <div className="device-orb"><span>π</span></div>
-            <div className="device-copy"><div className="device-name">Living Room TV <span className="connected"><span className="status-dot"></span>{status.online ? "Connected" : "Offline"}</span></div><div className="device-meta">{status.hostname} <span className="meta-separator">·</span> {status.display}</div></div>
-            <div className="mode-chip">{mode}</div>
-          </div>
-
           <div className="mobile-tabs" role="tablist" aria-label="Choose remote or TV preview">
-            {(["Remote", "TV Preview"] as RemoteTab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)} role="tab" aria-selected={tab === item}>{item === "Remote" ? <Icon>⌁</Icon> : <Icon>▣</Icon>}{item}</button>)}
+            {(["Remote", "TV Preview"] as RemoteTab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => { haptic(); setTab(item); }} role="tab" aria-selected={tab === item}>{item === "Remote" ? <Icon>⌁</Icon> : <Icon>▣</Icon>}{item}</button>)}
           </div>
 
           <div className={`phone-surface ${tab === "TV Preview" ? "tab-hidden" : ""}`}>
             <>
-              <div className="launcher-grid">
-                {serviceTiles.map((tile) => <button key={tile.name} className={`launcher-card ${tile.className} ${mode === tile.name ? "selected" : ""}`} onClick={() => setAppMode(tile.name as Mode)}><span className="launcher-mark">{tile.mark}</span><span className="launcher-copy"><strong>{tile.name}</strong><small>{tile.meta}</small></span><span className="launch-arrow">↗</span></button>)}
-              </div>
-              <button className={`home-launcher ${mode === "Home" ? "selected" : ""}`} onClick={() => setAppMode("Home")}><span className="home-launcher-icon">⌂</span><span><strong>Home</strong><small>piPlay home</small></span><span className="launch-arrow">↗</span></button>
               <RemoteControls mode={mode} move={move} action={action} setAppMode={setAppMode} volume={volume} muted={muted} busy={busy} keyboardOpen={keyboardOpen} setKeyboardOpen={setKeyboardOpen} keyboardText={keyboardText} setKeyboardText={setKeyboardText} sendTypedText={sendTypedText} sendCommand={sendCommand} />
+              <ContextPanel mode={mode} nowPlaying={status.nowPlaying} action={action} />
+              <div className="launcher-grid">
+                {serviceTiles.map((tile) => <button key={tile.name} className={`launcher-card ${tile.className} ${mode === tile.name ? "selected" : ""}`} onClick={() => { haptic(); void setAppMode(tile.name as Mode); }}><span className="launcher-mark"><BrandIcon name={tile.name as Mode} /></span><span className="launcher-copy"><strong>{tile.name}</strong><small>{tile.meta}</small></span></button>)}
+              </div>
+              <button className={`home-launcher ${mode === "Home" ? "selected" : ""}`} onClick={() => { haptic(); void setAppMode("Home"); }}><span className="home-launcher-icon"><BrandIcon name="Home" /></span><span><strong>Home</strong><small>piPlay home</small></span><span className="launch-arrow">↗</span></button>
               <Trackpad sendPointer={sendPointer} />
+              <div className="device-status-card">
+                <span className="status-dot"></span><span className="device-name">{status.online ? "Living Room TV connected" : "Living Room TV offline"}</span>
+                <span className="device-meta">{status.hostname} · {status.display}</span><span className="mode-chip">{mode}</span>
+              </div>
             </>
           </div>
 
@@ -242,7 +222,7 @@ export default function Home() {
 
       <footer className="bottom-bar"><div className="footer-signal"><span className="status-dot"></span> Raspberry Pi {status.online ? "online" : "offline"}</div><div className="footer-hint"><span className="keycap">⌁</span> Live controls over your private network</div><button className="settings-link" onClick={() => setSettingsOpen((value) => !value)}><Icon>⚙</Icon> System</button></footer>
 
-      {settingsOpen && <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="System information"><div className="settings-panel"><div className="panel-header"><div><p className="overline">SYSTEM CONTROL</p><h2>{status.hostname}</h2></div><button className="close-panel" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button></div><div className="system-list"><SystemRow label="Display" value={status.display} good={status.tvPower === "on"} /><SystemRow label="TV power" value={status.tvPower} good={status.tvPower === "on"} /><SystemRow label="Network" value={status.ip} good={status.online} /><SystemRow label="HDMI audio" value={`${muted ? "Muted · " : ""}${volume}%`} good={!muted} /><SystemRow label="Local storage" value={`${status.freeGb} GB available`} /><SystemRow label="Kodi" value={status.kodi ? "Running" : "Ready"} good={status.kodi} /><SystemRow label="Chromium" value={status.browser ? "Running" : "Stopped"} good={status.browser} /></div><div className="system-actions"><button disabled={busy} onClick={() => void sendCommand("tv", "wake")}>Wake TV</button><button disabled={busy} onClick={() => void sendCommand("tv", "standby")}>TV Standby</button><button disabled={busy} onClick={() => { setToast("Reconnecting display…"); void sendCommand("system", "reconnect"); }}>Reconnect</button><button disabled={busy} onClick={() => { if (window.confirm("Restart the Raspberry Pi now?")) void sendCommand("system", "reboot"); }}>Restart Pi</button><button className="danger" disabled={busy} onClick={() => { if (window.confirm("Shut down the Raspberry Pi now?")) void sendCommand("system", "poweroff"); }}>Shut Down</button><button className="danger" disabled={busy} onClick={() => { setSettingsOpen(false); void sendCommand("system", "exit"); }}>Exit Display</button></div></div></div>}
+      {settingsOpen && <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="System information"><div className="settings-panel"><div className="panel-header"><div><p className="overline">SYSTEM CONTROL</p><h2>{status.hostname}</h2></div><button className="close-panel" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button></div><div className="system-list"><SystemRow label="Display" value={status.display} good={status.tvPower === "on"} /><SystemRow label="TV power" value={status.tvPower} good={status.tvPower === "on"} /><SystemRow label="Network" value={status.ip} good={status.online} /><SystemRow label="HDMI audio" value={`${muted ? "Muted · " : ""}${volume}%`} good={!muted} /><SystemRow label="Local storage" value={`${status.freeGb} GB available`} /><SystemRow label="Kodi" value={status.kodi ? "Running" : "Stopped"} good={status.kodi} /><SystemRow label="Firefox" value={status.browser ? "Running" : "Stopped"} good={status.browser} /></div><div className="system-actions"><button disabled={busy} onClick={() => void sendCommand("tv", "wake")}>Wake TV</button><button disabled={busy} onClick={() => void sendCommand("tv", "standby")}>TV Standby</button><button disabled={busy} onClick={() => { setToast("Reconnecting display…"); void sendCommand("system", "reconnect"); }}>Reconnect</button><button disabled={busy} onClick={() => { if (window.confirm("Restart the Raspberry Pi now?")) void sendCommand("system", "reboot"); }}>Restart Pi</button><button className="danger" disabled={busy} onClick={() => { if (window.confirm("Shut down the Raspberry Pi now?")) void sendCommand("system", "poweroff"); }}>Shut Down</button><button className="danger" disabled={busy} onClick={() => { setSettingsOpen(false); void sendCommand("system", "exit"); }}>Exit Display</button></div></div></div>}
     </main>
   );
 }
@@ -252,7 +232,21 @@ function SystemRow({ label, value, good }: { label: string; value: string; good?
 }
 
 function RemoteControls({ mode, move, action, setAppMode, volume, muted, busy, keyboardOpen, setKeyboardOpen, keyboardText, setKeyboardText, sendTypedText, sendCommand }: { mode: Mode; move: (direction: "left" | "right" | "up" | "down") => void; action: (label: string) => void; setAppMode: (mode: Mode) => void; volume: number; muted: boolean; busy: boolean; keyboardOpen: boolean; setKeyboardOpen: (value: boolean) => void; keyboardText: string; setKeyboardText: (value: string) => void; sendTypedText: () => Promise<void>; sendCommand: (action: string, value: string) => Promise<boolean> }) {
-  return <div className="remote-controls"><div className="control-label"><span>REMOTE</span><span className="control-mode">{busy ? "Sending…" : mode === "Home" ? "Choose an app" : `Navigate ${mode}`}</span></div><div className="browser-controls"><button disabled={busy} onClick={() => void sendCommand("key", "shift-tab")}>⇤ Previous</button><button disabled={busy} onClick={() => void sendCommand("key", "tab")}>Next ⇥</button><button className={keyboardOpen ? "active" : ""} onClick={() => setKeyboardOpen(!keyboardOpen)}>⌨ Type</button></div>{keyboardOpen && <form className="remote-keyboard" onSubmit={(event) => { event.preventDefault(); void sendTypedText(); }}><label htmlFor="remote-text">Type into the selected field on TV</label><div><input id="remote-text" type="text" value={keyboardText} onChange={(event) => setKeyboardText(event.target.value)} placeholder="Email, password, or search" autoComplete="off" /><button type="submit" disabled={busy || !keyboardText}>Send</button></div><div className="keyboard-actions"><button type="button" disabled={busy} onClick={() => void sendCommand("key", "delete")}>⌫ Delete</button><button type="button" disabled={busy} onClick={() => void sendCommand("key", "ok")}>↵ Enter</button></div><small>Password text is sent directly to the TV and is never stored.</small></form>}<div className="dpad-wrap"><div className="dpad"><button disabled={busy} className="dpad-up" onClick={() => move("up")} aria-label="Up">↑</button><button disabled={busy} className="dpad-left" onClick={() => move("left")} aria-label="Left">←</button><button disabled={busy} className="dpad-ok" onClick={() => action("Center / OK")} aria-label="Center / OK">OK</button><button disabled={busy} className="dpad-right" onClick={() => move("right")} aria-label="Right">→</button><button disabled={busy} className="dpad-down" onClick={() => move("down")} aria-label="Down">↓</button></div><div className="back-home"><button disabled={busy} onClick={() => action("Back")}><span>↩</span>Back</button><button disabled={busy} onClick={() => setAppMode("Home")}><span>⌂</span>Home</button></div></div><div className="media-controls"><button disabled={busy} onClick={() => action("Previous")} aria-label="Previous"><span>◀</span><small>PREV</small></button><button disabled={busy} className="play-control" onClick={() => action("Play / Pause")} aria-label="Play or pause"><span>▶Ⅱ</span><small>PLAY</small></button><button disabled={busy} onClick={() => action("Next")} aria-label="Next"><span>▶</span><small>NEXT</small></button></div><div className="volume-controls"><button disabled={busy} onClick={() => action("Volume Down")} aria-label="Volume down">−</button><div className="volume-track"><span style={{ width: `${muted ? 0 : volume}%` }}></span></div><button disabled={busy} onClick={() => action("Volume Up")} aria-label="Volume up">+</button><button disabled={busy} className="mute-button" onClick={() => action("Mute")} aria-label="Mute">{muted ? "×" : "⌁"}</button></div></div>;
+  return <div className="remote-controls">
+    <div className="control-label"><span>REMOTE</span><span className="control-mode">{busy ? "Sending…" : mode === "Home" ? "Ready" : mode}</span></div>
+    <div className="dpad-wrap"><div className="dpad"><button disabled={busy} className="dpad-up" onClick={() => move("up")} aria-label="Up">↑</button><button disabled={busy} className="dpad-left" onClick={() => move("left")} aria-label="Left">←</button><button disabled={busy} className="dpad-ok" onClick={() => action("Center / OK")} aria-label="Center / OK">OK</button><button disabled={busy} className="dpad-right" onClick={() => move("right")} aria-label="Right">→</button><button disabled={busy} className="dpad-down" onClick={() => move("down")} aria-label="Down">↓</button></div><div className="back-home"><button disabled={busy} onClick={() => action("Back")}><span>↩</span>Back</button><button disabled={busy} onClick={() => { haptic(); void setAppMode("Home"); }}><span>⌂</span>Home</button></div></div>
+    <div className="media-controls"><button disabled={busy} onClick={() => action("Previous")} aria-label="Previous"><span>◀</span><small>PREV</small></button><button disabled={busy} className="play-control" onClick={() => action("Play / Pause")} aria-label="Play or pause"><span>▶Ⅱ</span><small>PLAY / PAUSE</small></button><button disabled={busy} onClick={() => action("Next")} aria-label="Next"><span>▶</span><small>NEXT</small></button></div>
+    <div className="volume-controls"><button disabled={busy} onClick={() => action("Volume Down")} aria-label="Volume down">−</button><div className="volume-track"><span style={{ width: `${muted ? 0 : volume}%` }}></span></div><button disabled={busy} onClick={() => action("Volume Up")} aria-label="Volume up">+</button><button disabled={busy} className="mute-button" onClick={() => action("Mute")} aria-label="Mute">{muted ? "×" : "⌁"}</button></div>
+    <div className="browser-controls"><button disabled={busy} onClick={() => void sendCommand("key", "shift-tab")}>⇤ Previous</button><button disabled={busy} onClick={() => void sendCommand("key", "tab")}>Next ⇥</button><button className={`keyboard-toggle ${keyboardOpen ? "active" : ""}`} onClick={() => { haptic(); setKeyboardOpen(!keyboardOpen); }} aria-label="Open text entry" aria-expanded={keyboardOpen}>⌨<span>Text</span></button></div>
+    {keyboardOpen && <form className="remote-keyboard" onSubmit={(event) => { event.preventDefault(); void sendTypedText(); }}><label htmlFor="remote-text">Type into the selected field on TV</label><div><input id="remote-text" type="text" value={keyboardText} onChange={(event) => setKeyboardText(event.target.value)} placeholder="Search or enter text" autoComplete="off" autoFocus /><button type="submit" disabled={busy || !keyboardText}>Send</button></div><div className="keyboard-actions"><button type="button" disabled={busy} onClick={() => void sendCommand("key", "delete")}>⌫ Delete</button><button type="button" disabled={busy} onClick={() => void sendCommand("key", "ok")}>↵ Enter</button></div><small>Text is sent directly to the TV and never stored.</small></form>}
+  </div>;
+}
+
+function ContextPanel({ mode, nowPlaying, action }: { mode: Mode; nowPlaying: NowPlaying | null; action: (label: string) => void }) {
+  if (mode === "Spotify" && nowPlaying) return <section className="context-panel spotify-context"><div className="mini-art" aria-hidden="true">{/^https?:|^data:/.test(nowPlaying.artUrl) ? <img src={nowPlaying.artUrl} alt="" /> : <BrandIcon name="Spotify" />}</div><div className="context-copy"><small>NOW PLAYING</small><strong>{nowPlaying.title}</strong><span>{[nowPlaying.artist, nowPlaying.album].filter(Boolean).join(" · ")}</span></div><span className={`playing-dot ${nowPlaying.status === "playing" ? "active" : ""}`}>{nowPlaying.status === "playing" ? "Playing" : "Paused"}</span></section>;
+  if (mode === "Spotify") return <section className="context-panel spotify-context empty-context"><div className="mini-art" aria-hidden="true"><BrandIcon name="Spotify" /></div><div className="context-copy"><small>SPOTIFY IS OPEN</small><strong>Choose something to play</strong><span>Track details will appear here</span></div></section>;
+  if (mode === "Disney+") return <section className="context-panel disney-context"><div className="context-copy"><small>DISNEY+ IS OPEN</small><strong>Browse on the TV</strong><span>The focused title is shown in the live preview</span></div><button onClick={() => action("Center / OK")}>Open</button></section>;
+  return <div className="apps-heading"><span>APPS</span><small>Launch on TV</small></div>;
 }
 
 function LivePreview({ sendPointer }: { sendPointer: (value: string) => Promise<void> }) {
@@ -277,6 +271,7 @@ function LivePreview({ sendPointer }: { sendPointer: (value: string) => Promise<
 
 function Trackpad({ sendPointer }: { sendPointer: (value: string) => Promise<void> }) {
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
+  const dragDistance = useRef(0);
   const pending = useRef({ x: 0, y: 0 });
   const timer = useRef<number | null>(null);
   const flush = () => {
@@ -287,23 +282,13 @@ function Trackpad({ sendPointer }: { sendPointer: (value: string) => Promise<voi
   };
   const movePointer = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!lastPoint.current) return;
-    pending.current.x += (event.clientX - lastPoint.current.x) * 2;
-    pending.current.y += (event.clientY - lastPoint.current.y) * 2;
+    const dx = event.clientX - lastPoint.current.x;
+    const dy = event.clientY - lastPoint.current.y;
+    dragDistance.current += Math.abs(dx) + Math.abs(dy);
+    pending.current.x += dx * 2;
+    pending.current.y += dy * 2;
     lastPoint.current = { x: event.clientX, y: event.clientY };
     if (timer.current === null) timer.current = window.setTimeout(flush, 45);
   };
-  return <section className="trackpad-section"><div className="control-label"><span>POINTER</span><span className="control-mode">Move, click, or scroll</span></div><div className="trackpad" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); lastPoint.current = { x: event.clientX, y: event.clientY }; }} onPointerMove={movePointer} onPointerUp={() => { lastPoint.current = null; flush(); }}><span>Drag to move the TV pointer</span><small>Tap the live preview for precise selection</small></div><div className="pointer-buttons"><button onClick={() => void sendPointer("click")}>Click</button><button onClick={() => void sendPointer("scroll:-4")}>Scroll up</button><button onClick={() => void sendPointer("scroll:4")}>Scroll down</button></div></section>;
-}
-
-function SpotifyRemote({ progress, setProgress, isPlaying, setIsPlaying, volume, muted, setMuted, action }: { progress: number; setProgress: (value: number) => void; isPlaying: boolean; setIsPlaying: (value: boolean) => void; volume: number; muted: boolean; setMuted: (value: boolean) => void; action: (label: string) => void }) {
-  const minutes = Math.floor((progress / 100) * 243 / 60);
-  const seconds = Math.floor((progress / 100) * 243) % 60;
-  return <div className="spotify-remote"><div className="now-playing-label"><span className="spotify-mini">◉</span><span>NOW PLAYING</span><span className="playing-eq"><i></i><i></i><i></i></span></div><div className="album-art" style={{ background: `linear-gradient(145deg, ${spotifyTrack.color}, #3e283c 60%, #171c2d)` }}><div className="album-sun"></div><div className="album-lines"></div><strong>M83</strong><small>HURRY UP,<br />WE’RE DREAMING</small></div><div className="track-details"><h2>{spotifyTrack.title}</h2><p>{spotifyTrack.artist} <span>·</span> {spotifyTrack.album}</p></div><div className="progress-area"><input type="range" min="0" max="100" value={progress} onChange={(event) => setProgress(Number(event.target.value))} aria-label="Playback progress" /><div><span>{String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}</span><span>04:03</span></div></div><div className="spotify-actions"><button onClick={() => action("Shuffle")} aria-label="Shuffle">⤨</button><button onClick={() => action("Previous")} aria-label="Previous">◀</button><button className="spotify-play" onClick={() => { setIsPlaying(!isPlaying); action(isPlaying ? "Paused" : "Playing"); }} aria-label={isPlaying ? "Pause" : "Play"}>{isPlaying ? "Ⅱ" : "▶"}</button><button onClick={() => action("Next")} aria-label="Next">▶</button><button onClick={() => action("Repeat")} aria-label="Repeat">↻</button></div><div className="spotify-volume"><span>⌁</span><input type="range" min="0" max="100" value={muted ? 0 : volume} readOnly aria-label="Volume" /><button onClick={() => { setMuted(!muted); action(muted ? "Unmuted" : "Muted"); }}>{muted ? "×" : "●"}</button></div><p className="connect-note"><span className="status-dot"></span> Playing on Living Room TV via Spotify Connect</p></div>;
-}
-
-function TvScreen({ mode, clock, selectedIndex, isPlaying, progress, selection, setAppMode }: { mode: Mode; clock: string; selectedIndex: number; isPlaying: boolean; progress: number; selection: { title: string; kind?: string; color: string; accent?: string; meta?: string; icon?: string }; setAppMode: (mode: Mode) => void }) {
-  if (mode === "Spotify") return <div className="tv-spotify"><div className="tv-spotify-ambient"></div><div className="tv-spotify-content"><div className="tv-kicker"><span className="spotify-mini">◉</span> SPOTIFY WEB PLAYER <span>· LIVING ROOM TV</span></div><div className="tv-spotify-body"><div className="tv-album-art" style={{ background: "linear-gradient(145deg, #57c785, #173f2a 65%, #111b17)" }}><div className="album-sun"></div><strong>◉</strong></div><div className="tv-track"><p>ACTIVE APP</p><h2>Spotify</h2><h3>Web Player</h3><span>Sign in on the TV, then use the media controls here.</span><div className="tv-progress"><span style={{ width: "100%" }}></span></div><div className="tv-progress-time"><span>Remote ready</span><span>HDMI audio</span></div><div className="tv-track-buttons"><span>⤨</span><span>◀</span><b>▶</b><span>▶</span><span>↻</span></div></div></div></div><div className="tv-clock">{clock}</div></div>;
-  if (mode === "Disney+") return <div className="tv-disney"><div className="tv-appbar"><span className="disney-word">Disney<span>+</span></span><span>Home　 Originals　 Movies　 Series</span><b>{clock}</b></div><div className="disney-hero" style={{ background: `radial-gradient(circle at 68% 45%, ${selection.accent}44, transparent 27%), linear-gradient(90deg, ${selection.color} 0%, #101724 78%)` }}><div className="hero-copy"><small>{selection.kind} · New this week</small><h2>{selection.title}</h2><p>Stream a new adventure, only on Disney+.</p><button onClick={() => setAppMode("Disney+")}>Watch now <span>→</span></button></div><div className="hero-moon"></div></div><div className="tv-row-heading"><span>Recommended for you</span><small>Use the remote to browse</small></div><div className="tv-card-row">{disneyItems.map((item, index) => <div key={item.title} className={`tv-content-card ${index === selectedIndex ? "focused" : ""}`} style={{ background: `linear-gradient(145deg, ${item.accent}77, ${item.color})` }}><strong>{item.title}</strong><small>{item.kind}</small></div>)}</div><div className="tv-disney-footer"><span>Disney+ · Chromium Fullscreen</span><span>HDMI 1</span></div></div>;
-  if (mode === "My Media") return <div className="tv-kodi"><div className="kodi-top"><div className="kodi-logo">KODI</div><div className="kodi-tabs"><span className="active">Movies</span><span>TV Shows</span><span>Music</span></div><span>{clock}</span></div><div className="kodi-body"><p className="kodi-kicker">MY MEDIA <span>· Local library</span></p><h2>{selection.title}</h2><p className="kodi-sub">Browse your collection from the phone remote</p><div className="kodi-card-row">{mediaItems.map((item, index) => <div key={item.title} className={`kodi-card ${index === selectedIndex ? "focused" : ""}`} style={{ background: `linear-gradient(145deg, ${item.color}, #171a24)` }}><span>{item.icon}</span><strong>{item.title}</strong><small>{item.meta}</small></div>)}</div><div className="kodi-status"><span><i></i> Library updated just now</span><span>347 GB available</span></div></div></div>;
-  return <div className="tv-home"><div className="home-top"><span className="pi-word"><b>π</b> piPlay</span><span><span className="tv-wifi">⌁</span> Wi-Fi connected　 {clock}</span></div><div className="home-center"><p>GOOD EVENING</p><h2>What would you like to watch?</h2><div className="home-tv-tiles">{serviceTiles.map((tile) => <button key={tile.name} onClick={() => setAppMode(tile.name as Mode)} className={`home-tv-tile ${tile.className}`}><span>{tile.mark}</span><strong>{tile.name}</strong><small>{tile.eyebrow}</small></button>)}</div></div><div className="home-bottom"><span>Raspberry Pi 5 · HDMI 1</span><span>⚙ Settings</span></div></div>;
+  return <section className="trackpad-section"><div className="control-label"><span>POINTER</span><span className="control-mode">Tap to click · drag to move</span></div><div className="trackpad" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); dragDistance.current = 0; lastPoint.current = { x: event.clientX, y: event.clientY }; }} onPointerMove={movePointer} onPointerUp={() => { lastPoint.current = null; flush(); if (dragDistance.current < 8) { haptic(); void sendPointer("click"); } }}><span>Tap to click</span><small>Drag to move the TV pointer</small></div><div className="pointer-buttons"><button onClick={() => void sendPointer("click")}>Click</button><button onClick={() => void sendPointer("scroll:-4")}>Scroll up</button><button onClick={() => void sendPointer("scroll:4")}>Scroll down</button></div></section>;
 }

@@ -57,6 +57,8 @@ if __name__ == "__main__":
             "--no-remote",
             "--profile",
             str(PROFILE),
+            "--remote-debugging-port",
+            "9222",
             "--kiosk",
             requested_url(),
         ],

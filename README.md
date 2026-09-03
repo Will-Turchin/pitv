@@ -1,6 +1,6 @@
 # piPlay · Living Room TV
 
-This is the standalone piPlay Living Room TV controller for a Raspberry Pi. The interface talks to a local Python API that launches Chromium or Kodi, sends Wayland remote-control keys, controls PipeWire HDMI audio, and controls TV power over HDMI-CEC.
+This is the standalone piPlay Living Room TV controller for a Raspberry Pi. The interface talks to a local Python API that launches Firefox or Kodi, sends Wayland remote-control keys, controls PipeWire HDMI audio, and controls TV power over HDMI-CEC.
 
 ## Requirements
 
@@ -30,4 +30,4 @@ The static production files are written to `dist/`. Run `python3 server.py` in p
 
 ## Notes
 
-The production service files are in `deploy/`. `browser_launcher.py` starts Chromium at the URL selected by the controller. The default hardware configuration targets `/dev/cec1`, physical HDMI address `2.0.0.0`, and Wayland display `wayland-0`; these can be overridden with environment variables in the service.
+The production service files are in `deploy/`. `browser_launcher.py` starts Firefox at the URL selected by the controller. The default hardware configuration targets `/dev/cec1`, physical HDMI address `2.0.0.0`, and Wayland display `wayland-0`; these can be overridden with environment variables in the service.

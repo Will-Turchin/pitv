@@ -17,6 +17,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+import spatial_navigation
+
 
 APP_ROOT = Path(__file__).resolve().parent
 DIST_ROOT = APP_ROOT / "dist"
@@ -27,6 +29,7 @@ CEC_DEVICE = os.environ.get("PIPLAY_CEC_DEVICE", "/dev/cec1")
 CEC_PHYSICAL_ADDRESS = os.environ.get("PIPLAY_CEC_PHYSICAL_ADDRESS", "2.0.0.0")
 DISPLAY_WIDTH = int(os.environ.get("PIPLAY_DISPLAY_WIDTH", "1920"))
 DISPLAY_HEIGHT = int(os.environ.get("PIPLAY_DISPLAY_HEIGHT", "1080"))
+CONFIGURED_AUDIO_SINK = os.environ.get("PIPLAY_AUDIO_SINK", "")
 HOME_URL = f"http://127.0.0.1:{PORT}/"
 APP_URLS = {
     "Home": HOME_URL,
@@ -44,6 +47,7 @@ CONTROL_ENV = {
 STATE_LOCK = threading.Lock()
 ACTION_LOCK = threading.Lock()
 SCREENSHOT_LOCK = threading.Lock()
+RESOLVED_AUDIO_SINK: str | None = None
 
 
 def run(command: list[str], timeout: float = 8, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -86,11 +90,53 @@ def stop_unit(unit: str) -> None:
     run(["systemctl", "--user", "reset-failed", unit], timeout=3)
 
 
+def audio_sink() -> str:
+    """Resolve the HDMI sink once so volume polls cannot jump between defaults."""
+    global RESOLVED_AUDIO_SINK
+    if CONFIGURED_AUDIO_SINK:
+        return CONFIGURED_AUDIO_SINK
+    if RESOLVED_AUDIO_SINK:
+        return RESOLVED_AUDIO_SINK
+    output = run(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"]).stdout
+    match = re.search(r"^id\s+(\d+),", output)
+    if not match:
+        raise RuntimeError(output.strip() or "Could not resolve the HDMI audio sink")
+    RESOLVED_AUDIO_SINK = match.group(1)
+    return RESOLVED_AUDIO_SINK
+
+
 def audio_status() -> tuple[int, bool]:
-    output = run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"]).stdout
+    output = run(["wpctl", "get-volume", audio_sink()]).stdout
     match = re.search(r"Volume:\s+([0-9.]+)", output)
-    volume = round(float(match.group(1)) * 100) if match else 0
+    if not match:
+        raise RuntimeError(output.strip() or "Could not read HDMI volume")
+    volume = round(float(match.group(1)) * 100)
     return max(0, min(100, volume)), "[MUTED]" in output
+
+
+def now_playing() -> dict[str, object] | None:
+    """Return live browser/player MPRIS metadata without invented track data."""
+    fields = "{{status}}\x1f{{title}}\x1f{{artist}}\x1f{{album}}\x1f{{mpris:artUrl}}\x1f{{mpris:length}}\x1f{{position}}"
+    result = run(["playerctl", "metadata", "--format", fields], timeout=3)
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.strip().split("\x1f")
+    if len(parts) != 7 or not parts[1]:
+        return None
+    try:
+        length = max(0, int(parts[5]) // 1000)
+        position = max(0, int(parts[6]) // 1000)
+    except ValueError:
+        length = position = 0
+    return {
+        "status": parts[0].lower(),
+        "title": parts[1],
+        "artist": parts[2],
+        "album": parts[3],
+        "artUrl": parts[4],
+        "lengthMs": length,
+        "positionMs": min(position, length) if length else position,
+    }
 
 
 def tv_power_status() -> str:
@@ -131,10 +177,11 @@ def status_payload(include_tv: bool = True) -> dict[str, object]:
         "volume": volume,
         "muted": muted,
         "tvPower": tv_power_status() if include_tv else "unknown",
-        "display": "VIZIO D32x-D1 · HDMI 2",
+        "display": "HDMI display",
         "browser": is_active("piplay-living-room-tv-browser.service"),
         "kodi": is_active("piplay-kodi.service"),
         "freeGb": round(disk.free / 1_000_000_000),
+        "nowPlaying": now_playing() if state.get("mode") == "Spotify" else None,
         "updated": int(time.time()),
     }
 
@@ -206,9 +253,18 @@ def media_action(value: str) -> str:
     playerctl = {"playpause": "play-pause", "previous": "previous", "next": "next"}
     result = run(["playerctl", playerctl[value]], timeout=3)
     if result.returncode != 0:
-        fallback = {"playpause": "space", "previous": "XF86AudioPrev", "next": "XF86AudioNext"}
-        wtype_key(fallback[value])
+        raise RuntimeError(result.stdout.strip() or "No controllable media player is available")
     return value.replace("playpause", "play / pause").title()
+
+
+def navigation_key(value: str) -> str:
+    """Send navigation that matches the active app's actual keyboard model."""
+    mode = read_state().get("mode")
+    if mode == "Disney+":
+        return spatial_navigation.move(value)
+    key_map = {"up": "Up", "down": "Down", "left": "Left", "right": "Right"}
+    wtype_key(key_map[value])
+    return f"{value.title()} sent"
 
 
 def cec(*arguments: str) -> str:
@@ -233,16 +289,18 @@ def perform_action(payload: dict[str, object]) -> tuple[str, dict[str, object]]:
             message = launch(value)
         elif action == "key":
             key_map = {
-                "up": "Up", "down": "Down", "left": "Left", "right": "Right",
                 "ok": "Return", "back": "Escape", "tab": "Tab", "delete": "BackSpace",
             }
-            if value == "shift-tab":
+            if value in {"up", "down", "left", "right"}:
+                message = navigation_key(value)
+            elif value == "shift-tab":
                 run(["wtype", "-M", "shift", "-k", "Tab", "-m", "shift"], timeout=3, check=True)
+                message = "Previous item focused"
             elif value not in key_map:
                 raise ValueError("Unknown key")
             else:
                 wtype_key(key_map[value])
-            message = f"{value.title()} sent"
+                message = f"{value.title()} sent"
         elif action == "text":
             type_text(value)
             message = "Text sent"
@@ -274,14 +332,15 @@ def perform_action(payload: dict[str, object]) -> tuple[str, dict[str, object]]:
                 raise ValueError("Unknown media action")
             message = media_action(value)
         elif action == "volume":
+            sink = audio_sink()
             if value == "up":
-                run(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "5%+"], check=True)
+                run(["wpctl", "set-volume", "-l", "1.0", sink, "5%+"], check=True)
                 message = "Volume up"
             elif value == "down":
-                run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"], check=True)
+                run(["wpctl", "set-volume", sink, "5%-"], check=True)
                 message = "Volume down"
             elif value == "mute":
-                run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"], check=True)
+                run(["wpctl", "set-mute", sink, "toggle"], check=True)
                 message = "Mute toggled"
             else:
                 raise ValueError("Unknown volume action")
